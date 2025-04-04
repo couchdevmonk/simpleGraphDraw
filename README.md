@@ -1,2 +1,14 @@
 # simpleGraphDraw
 A simple python code to visually draw a graph and get the corresponding adjacency matrix.
+
+The program uses pyGame to make a canvas to draw vertices and edges on it. It also comes with a barebones UI to change modes between vertex addition or edge addition along with the features to save the adjacency matrix in a file or save the graph as a PNG file.
+
+#### Featues
+1. Add vertices or edges (toggle mode)
+2. Clear the board
+3. Save the underlying adjacency matrix and corresponding adjacencies in a text file
+4. Save the graph as a PNG snapshot
+
+#### Possible future features
+1. Add curved edges
+2. Ability to move the vertices and the corresponding edges
