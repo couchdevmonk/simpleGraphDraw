@@ -18,3 +18,4 @@ The program uses pyGame to make a canvas to draw vertices and edges on it. It al
 #### Possible future features
 1. Add curved edges
 2. Ability to move the vertices and the corresponding edges
+3. Make a web version
