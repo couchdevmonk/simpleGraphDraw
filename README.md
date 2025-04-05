@@ -14,8 +14,9 @@ The program uses pyGame to make a canvas to draw vertices and edges on it. It al
 2. Clear the board
 3. Save the underlying adjacency matrix and corresponding adjacencies in a text file
 4. Save the graph as a PNG snapshot
+5. Ability to move the vertices and the corresponding edges
 
 #### Possible future features
-1. Add curved edges
-2. Ability to move the vertices and the corresponding edges
-3. Make a web version
+-[ ] Add curved edges
+-[x] ~Ability to move the vertices and the corresponding edges~
+-[ ] Make a web version
