@@ -15,8 +15,9 @@ The program uses pyGame to make a canvas to draw vertices and edges on it. It al
 3. Save the underlying adjacency matrix and corresponding adjacencies in a text file
 4. Save the graph as a PNG snapshot
 5. Ability to move the vertices and the corresponding edges
+6. Web version available at: https://couchdevmonk.github.io/graphdraw
 
 #### Possible future features
 - [ ] Add curved edges
 - [x] ~Ability to move the vertices and the corresponding edges~ 
-- [ ] Make a web version
+- [x] ~Make a web version~
