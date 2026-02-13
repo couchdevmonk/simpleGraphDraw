@@ -1,0 +1,430 @@
+<!-- simpleGraphDraw by hm0nk -->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>simpleGraphDraw v1.5</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Verdana, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            height: 44px;
+            background: #ffffff;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+            flex-shrink: 0;
+            border-bottom: 1px solid rgba(0,0,0,0.04);
+        }
+        .header-title {
+            font-family: 'Segoe UI', Roboto, Verdana, sans-serif;
+            font-size: 16px;
+            font-weight: 600;
+            color: #101217;
+        }
+        .header-version {
+            margin-left: 8px;
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 500;
+        }
+        .header-logo {
+            width:20px;
+            height:20px;
+            display:inline-block;
+            margin-right:8px;
+            vertical-align:middle;
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #graph-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #menu {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            background: rgba(255, 255, 255, 0.92);
+            padding: 6px;
+            border-radius: 6px;
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.12);
+            max-width: 200px;
+            z-index: 10;
+            font-size: 13px;
+        }
+
+        .menu-section {
+            margin-bottom: 6px;
+        }
+
+        /* vertex edit popup - harmonized with main menu */
+        #vertex-menu {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+            z-index: 30;
+            display: none;
+            min-width: 200px;
+            font-size: 14px;
+        }
+        #vertex-menu label {
+            display: block;
+            margin-bottom: 4px;
+            color: #333;
+            font-size: 12px;
+        }
+        #vertex-menu input[type="text"],
+        #vertex-menu select,
+        #vertex-menu input[type="color"] {
+            width: 100%;
+            padding: 6px 8px;
+            margin-bottom: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fff;
+            box-sizing: border-box;
+        }
+        #vertex-menu button {
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            background: #f7f7ff;
+            cursor: pointer;
+        }
+        #vertex-menu button:hover { background: #eef; }
+
+        /* edge edit popup: similar styling to vertex menu */
+        #edge-menu {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+            z-index: 30;
+            display: none;
+            min-width: 220px;
+            font-size: 14px;
+        }
+        #edge-menu label {
+            display: block;
+            margin-bottom: 4px;
+            color: #333;
+            font-size: 12px;
+        }
+        #edge-menu input[type="text"],
+        #edge-menu select,
+        #edge-menu input[type="color"] {
+            width: 100%;
+            padding: 6px 8px;
+            margin-bottom: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fff;
+            box-sizing: border-box;
+        }
+        #edge-menu button {
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            background: #f7f7ff;
+            cursor: pointer;
+        }
+        #edge-menu button:hover { background: #eef; }
+
+        /* PNG preview modal */
+        #png-preview-overlay {
+            position: fixed;
+            left: 0;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.45);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            transition: opacity 180ms ease-in-out;
+        }
+        #png-preview {
+            background: #fff;
+            padding: 14px;
+            border-radius: 8px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+            max-width: 92%;
+            max-height: 92%;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            transform: scale(0.96);
+            opacity: 0;
+            transition: transform 180ms ease, opacity 180ms ease;
+        }
+        #png-preview.show {
+            transform: scale(1);
+            opacity: 1;
+        }
+        #png-preview .preview-header {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:8px;
+        }
+        #png-preview .preview-title { font-weight:700; color:#222; }
+        #png-preview .preview-body { overflow:auto; display:flex; justify-content:center; align-items:center; padding:6px 0; }
+        #png-preview img {
+            max-width: 100%;
+            max-height: 60vh;
+            border-radius:4px;
+            display:block;
+            box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+        }
+        #png-preview .preview-footer { display:flex; align-items:center; gap:8px; justify-content:space-between; }
+        #png-preview input[type="text"].filename {
+            padding:6px 8px; border:1px solid #ddd; border-radius:4px; width:56%;
+        }
+        #png-preview .preview-actions { display:flex; gap:8px; }
+        #png-preview button {
+            padding:8px 12px; border-radius:6px; border:0; background:#2b6df6; color:white; cursor:pointer;
+            box-shadow: 0 4px 12px rgba(43,109,246,0.18);
+        }
+        #png-preview button.secondary { background:#f0f0f0; color:#222; box-shadow:none; }
+        #png-preview .close-btn { background:transparent; color:#666; border:0; cursor:pointer; font-size:16px; }
+
+        .menu-title {
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: #333;
+            font-size: 13px;
+        }
+
+        .menu-option {
+            display: flex;
+            align-items: center;
+            padding: 4px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .menu-option:hover {
+            background: #f0f0f0;
+        }
+
+        .menu-option.active {
+            background: #e0e0ff;
+            font-weight: bold;
+        }
+
+        .color-option {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            margin-right: 8px;
+            border: 1px solid #ccc;
+        }
+        .shortcut-btn {
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            width:20px;
+            height:18px;
+            margin-right:6px;
+            border-radius:6px;
+            border:1px solid #e6edf6;
+            background:#f8fafc;
+            color:#111827;
+            font-weight:600;
+            font-size:11px;
+            cursor:default;
+            box-shadow: inset 0 -1px 0 rgba(0,0,0,0.02);
+        }
+        .shortcut-btn.small { width:18px; height:18px; font-size:10px; }
+
+        #status {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(245, 245, 245, 0.95);
+            padding: 8px 12px;
+            border-radius: 5px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+            display: none;
+            z-index: 10;
+        }
+
+        /* removed global color-picker - per-vertex menu is used instead */
+    </style>
+</head>
+
+<body>
+    <div id="header">
+        <img src="favicon.svg" alt="logo" class="header-logo" />
+        <div class="header-title">simpleGdraw <span class="header-version">v1.5</span></div>
+    </div>
+    <div id="canvas-container">
+        <canvas id="graph-canvas"></canvas>
+        <div id="menu">
+            <div class="menu-section">
+                <div class="menu-title">Modes</div>
+                <div class="menu-option" data-mode="addVertex">
+                    <button class="shortcut-btn" title="V">V</button>
+                    Add Vertex
+                </div>
+                <div class="menu-option" data-mode="addEdge">
+                    <button class="shortcut-btn" title="E">E</button>
+                    Add Edge
+                </div>
+                <div class="menu-option" data-mode="moveVertex">
+                    <button class="shortcut-btn" title="M">M</button>
+                    Move Vertex
+                </div>
+            </div>
+            
+            <div class="menu-section">
+                <div class="menu-title">Actions</div>
+                <div class="menu-option" id="save-data-btn">
+                    <button class="shortcut-btn" title="S">S</button>
+                    Save Graph Data (S)
+                </div>
+                <div class="menu-option" id="save-png-btn">
+                    <button class="shortcut-btn" title="P">P</button>
+                    Save as PNG (P)
+                </div>
+                <div class="menu-option" id="undo-btn">
+                    <button class="shortcut-btn" title="U">U</button>
+                    Undo (Ctrl+Z / U)
+                </div>
+                <div class="menu-option" id="redo-btn">
+                    <button class="shortcut-btn" title="R">R</button>
+                    Redo (Ctrl+Y / Ctrl+Shift+Z)
+                </div>
+                <div class="menu-option" id="clear-btn">
+                    <button class="shortcut-btn" title="C">C</button>
+                    Clear Board (C)
+                </div>
+            </div>
+            <div class="menu-section">
+                <div class="menu-title">Tip</div>
+                <div class="menu-option">
+                    Right-click a vertex or edge to edit its properties (label, color, shape/style).
+                </div>
+            </div>
+        </div>
+        <div id="status"></div>
+        <div id="vertex-menu">
+            <div style="font-weight: bold; margin-bottom: 6px;">Edit Vertex</div>
+            <label style="font-size: 12px;">Name</label>
+            <input id="vertex-name-input" type="text" style="width: 100%; margin-bottom: 6px;" />
+            <label style="font-size: 12px;">Color (border)</label>
+            <input id="vertex-color-input" type="color" value="#000000" style="width: 100%; margin-bottom: 6px;" />
+            <label style="font-size: 12px;">Shape</label>
+            <select id="vertex-shape-select" style="width: 100%; margin-bottom: 8px;">
+                <option value="circle">Circle</option>
+                <option value="square">Square</option>
+                <option value="triangle">Triangle</option>
+                <option value="diamond">Diamond</option>
+            </select>
+            <div style="display:flex; justify-content:space-between;">
+                <button id="vertex-apply-btn">Apply</button>
+                <button id="vertex-cancel-btn">Cancel</button>
+            </div>
+        </div>
+        <div id="edge-menu">
+            <div style="font-weight: bold; margin-bottom: 6px;">Edit Edge</div>
+            <label>Label</label>
+            <input id="edge-label-input" type="text" style="width:100%; margin-bottom:6px;" />
+            <label>Color</label>
+            <input id="edge-color-input" type="color" value="#000000" style="width:100%; margin-bottom:6px;" />
+            <label>Style</label>
+            <select id="edge-style-select" style="width:100%; margin-bottom:8px;">
+                <option value="solid">Solid</option>
+                <option value="dashed">Dashed</option>
+                <option value="dotted">Dotted</option>
+            </select>
+            <label>Direction</label>
+            <select id="edge-direction-select" style="width:100%; margin-bottom:8px;">
+                <option value="none">None</option>
+                <option value="A->B">A → B</option>
+                <option value="B->A">B → A</option>
+            </select>
+            <label style="display:flex; align-items:center; gap:8px; font-size:12px;">
+                <input id="edge-mid-checkbox" type="checkbox" />
+                <span>mid?</span>
+            </label>
+            <div style="display:flex; justify-content:space-between;">
+                <button id="edge-apply-btn">Apply</button>
+                <button id="edge-cancel-btn">Cancel</button>
+            </div>
+        </div>
+        <!-- Save preview overlay (text) -->
+        <div id="save-preview-overlay" style="display:none; position:fixed; left:0; top:0; right:0; bottom:0; background: rgba(0,0,0,0.45); z-index:210; align-items:center; justify-content:center;">
+            <div id="save-preview" style="background:#fff; padding:12px; border-radius:8px; width:80%; max-width:900px; max-height:80%; overflow:auto; box-shadow:0 10px 40px rgba(0,0,0,0.35);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-weight:700;">Graph Data Preview</div>
+                    <div>
+                        <button id="save-copy-btn" style="margin-right:8px; padding:6px 10px;">Copy</button>
+                        <a id="save-download-link" href="#"><button id="save-download-btn" style="padding:6px 10px;">Download</button></a>
+                        <button id="save-close-btn" style="margin-left:8px; padding:6px 10px;">Close</button>
+                    </div>
+                </div>
+                <textarea id="save-preview-text" style="width:100%; height:60vh; font-family:monospace; font-size:13px; padding:8px; border:1px solid #ddd; border-radius:6px;"></textarea>
+            </div>
+        </div>
+        <!-- PNG preview overlay -->
+        <div id="png-preview-overlay">
+            <div id="png-preview" role="dialog" aria-modal="true" aria-label="PNG preview">
+                <div class="preview-header">
+                    <div class="preview-title">PNG Preview</div>
+                    <div>
+                        <button class="close-btn" id="png-close-btn" title="Close">✕</button>
+                    </div>
+                </div>
+                <div class="preview-body">
+                    <img id="png-preview-img" src="" alt="preview" />
+                </div>
+                <div class="preview-footer">
+                    <input id="png-filename-input" class="filename" type="text" value="graph.png" />
+                    <div class="preview-actions">
+                        <a id="png-download-link" href="#" download="graph.png"><button id="png-download-btn">Download</button></a>
+                        <button id="png-close-btn-2" class="secondary">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="footer" style="text-align:center; padding:8px 6px; font-size:12px; color:#666;">
+        vibed and coded with &#9829; by hm0nk
+    </div>
+    <script src="graph.js"></script>
+</body>
+
+</html>
