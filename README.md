@@ -3,7 +3,7 @@ A simple python code to visually draw a graph and get the corresponding adjacenc
 
 The program uses pyGame to make a canvas to draw vertices and edges on it. It also comes with a barebones UI to change modes between vertex addition or edge addition along with the features to save the adjacency matrix in a file or save the graph as a PNG file.
 
-Web version available at: [https://couchdevmonk.github.io/graphdraw](https://couchdevmonk.github.io/simpleGraphDraw/)
+Web version available at: [https://couchdevmonk.github.io/simpleGraphDraw](https://couchdevmonk.github.io/simpleGraphDraw/)
 
 ~#### Packages used (python version not maintained anymore)~
 ~1. pyGame~
