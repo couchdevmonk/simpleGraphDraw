@@ -242,6 +242,7 @@ class GraphApp {
             const closeBtn2 = document.getElementById('png-close-btn-2');
             const downloadLink = document.getElementById('png-download-link');
             const filenameInput = document.getElementById('png-filename-input');
+            const copyBtn = document.getElementById('png-copy-btn');
             if (closeBtn) closeBtn.addEventListener('click', () => {
                 pngOverlay.style.display = 'none';
                 document.getElementById('png-preview').classList.remove('show');
@@ -249,6 +250,9 @@ class GraphApp {
             if (closeBtn2) closeBtn2.addEventListener('click', () => {
                 pngOverlay.style.display = 'none';
                 document.getElementById('png-preview').classList.remove('show');
+            });
+            if (copyBtn) copyBtn.addEventListener('click', async () => {
+                await this.copyPNGToClipboard();
             });
             if (downloadLink) {
                 // download link will be updated in showPNGPreview
@@ -1316,6 +1320,28 @@ class GraphApp {
             const box = document.getElementById('png-preview');
             if (box) box.classList.add('show');
         }, 20);
+    }
+
+    async copyPNGToClipboard() {
+        const dataURL = this.lastPNGDataURL || (document.getElementById('png-preview-img') || {}).src || '';
+        if (!dataURL) {
+            this.showStatus('No PNG to copy');
+            return;
+        }
+        if (!navigator.clipboard || typeof navigator.clipboard.write !== 'function' || typeof ClipboardItem === 'undefined') {
+            this.showStatus('Clipboard image copy not supported');
+            return;
+        }
+
+        try {
+            const response = await fetch(dataURL);
+            const blob = await response.blob();
+            const mime = blob.type || 'image/png';
+            await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+            this.showStatus('PNG copied to clipboard');
+        } catch (err) {
+            this.showStatus('PNG copy failed');
+        }
     }
 
     showSavePreview(content, filename = 'graph_data.txt') {
