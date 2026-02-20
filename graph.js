@@ -44,7 +44,7 @@ class Graph {
 
     // Return index of edge near point (distance to segment less than threshold), prefer top-most (last added)
     getEdgeAtPos(x, y) {
-        const thresh = 14; // pixels (increased sensitivity)
+        const thresh = 10; // pixels
         for (let i = this.edges.length - 1; i >= 0; i--) {
             const [aIdx, bIdx] = this.edges[i];
             const a = this.vertices[aIdx];
@@ -116,8 +116,14 @@ class GraphApp {
     this.editingEdgeIdx = null;
     this.history = [];
     this.historyIndex = -1; // points to latest saved snapshot
-    this.vertexRadii = [];
-    this.hoveredEdgeIdx = null;
+        this.vertexRadii = [];
+        this.labelFontSize = 14;
+        this.labelFontFamily = '"Cambria Math","STIX Two Text","Times New Roman",serif';
+        this.labelFont = `${this.labelFontSize}px ${this.labelFontFamily}`;
+        this.vertexLabelMaxWidth = 72; // px, keeps label wrapping visually consistent across vertices
+        this.vertexLabelLineHeight = 16;
+        this.mathSvgCache = new Map(); // tex -> { status, img, width, height }
+        this.hoveredEdgeIdx = null;
     this.lastPNGDataURL = null;
     this.arrowActions = []; // temporary storage of arrows to draw on top
     this.savePreviewBlobUrl = null;
@@ -155,14 +161,17 @@ class GraphApp {
         this.canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
         this.canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
         this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
+        this.canvas.addEventListener('dblclick', this.handleDoubleClick.bind(this));
 
         // Keyboard events
         document.addEventListener('keydown', this.handleKeyDown.bind(this));
+        document.addEventListener('mousedown', this.handleDocumentMouseDown.bind(this));
 
         // Menu events
         document.querySelectorAll('[data-mode]').forEach(option => {
             option.addEventListener('click', (e) => {
                 this.mode = e.currentTarget.dataset.mode;
+                if (this.mode !== 'addEdge') this.graph.selectedVertex = null;
                 this.showStatus(`${this.mode.replace(/([A-Z])/g, ' $1').trim()} mode`);
                 this.updateMenu();
                 this.render();
@@ -346,8 +355,7 @@ class GraphApp {
         const { x, y } = this.getCanvasCoordinates(e);
         // compute vertex radii before hit-testing
         this.computeVertexRadii();
-        const vertexIdx = this.getTopVertexAt(x, y);
-        const edgeIdx = this.graph.getEdgeAtPos(x, y);
+        const vertexIdx = this.getTopVertexAt(x, y, this.mode === 'addEdge' ? 8 : 0);
 
         if (this.mode === 'addVertex') {
             this.graph.addVertex(x, y, this.currentColor);
@@ -355,16 +363,22 @@ class GraphApp {
             this.showStatus("Vertex added");
         }
         else if (this.mode === 'addEdge') {
-            if (vertexIdx !== null) {
+            const targetVertexIdx = vertexIdx !== null ? vertexIdx : this.getNearestVertexAt(x, y, 10);
+            if (targetVertexIdx !== null) {
                 if (this.graph.selectedVertex === null) {
-                    this.graph.selectedVertex = vertexIdx;
+                    this.graph.selectedVertex = targetVertexIdx;
+                    this.showStatus(`Selected ${this.graph.vertexLabels[targetVertexIdx]} as source`);
                 } else {
-                    if (this.graph.addEdge(this.graph.selectedVertex, vertexIdx)) {
+                    if (this.graph.addEdge(this.graph.selectedVertex, targetVertexIdx)) {
                         this.pushHistory();
                         this.showStatus("Edge added");
+                    } else {
+                        this.showStatus("Invalid edge selection");
                     }
                     this.graph.selectedVertex = null;
                 }
+            } else if (this.graph.selectedVertex !== null) {
+                this.showStatus("Select the target vertex");
             }
         }
         else if (this.mode === 'moveVertex') {
@@ -386,6 +400,14 @@ class GraphApp {
         }
         this.graph.draggedVertex = null;
         this._dragging = false;
+    }
+
+    handleDoubleClick(e) {
+        if (this.mode !== 'select') return;
+        const { x, y } = this.getCanvasCoordinates(e);
+        const opened = this.openContextMenuAt(x, y, e.clientX, e.clientY);
+        if (!opened) this.hideContextMenus();
+        this.render();
     }
 
     // History (undo) support: snapshot graph state
@@ -480,19 +502,328 @@ class GraphApp {
     computeVertexRadii() {
         const radii = [];
         // Use the same font as rendering
-        this.ctx.font = '12px Verdana';
-        const padding = 8; // px horizontal padding
+        this.applyLabelFont(this.ctx);
+        const padding = 9; // px around wrapped text block
         const minR = 14;
         this.graph.vertexLabels.forEach((label, i) => {
-            const text = String(label || '');
-            const metrics = this.ctx.measureText(text);
-            const textWidth = metrics.width || 0;
-            // approximate text height as 12px
-            const textHeight = 12;
-            const r = Math.max(minR, Math.ceil(Math.max(textWidth / 2 + padding, textHeight / 2 + padding)));
+            let maxLineWidth = 0;
+            let textHeight = this.labelFontSize;
+            if (this.hasInlineMath(label)) {
+                const measured = this.measureInlineLabel(label, this.ctx);
+                maxLineWidth = measured.width;
+                textHeight = measured.height;
+            } else {
+                const lines = this.wrapLabelText(label, this.vertexLabelMaxWidth, this.ctx);
+                maxLineWidth = lines.reduce((m, line) => Math.max(m, this.ctx.measureText(line).width || 0), 0);
+                textHeight = Math.max(this.labelFontSize, lines.length * this.vertexLabelLineHeight);
+            }
+            const r = Math.max(minR, Math.ceil(Math.max(maxLineWidth / 2 + padding, textHeight / 2 + padding)));
             radii.push(r);
         });
         this.vertexRadii = radii;
+    }
+
+    applyLabelFont(ctx) {
+        ctx.font = this.labelFont;
+    }
+
+    // Wrap label text to a target pixel width, preserving words when possible.
+    wrapLabelText(label, maxWidth, ctx = this.ctx) {
+        const text = String(label || '').trim();
+        if (!text) return [''];
+
+        const words = text.split(/\s+/).filter(Boolean);
+        const lines = [];
+        let current = '';
+
+        const splitLongWord = (word) => {
+            const parts = [];
+            let chunk = '';
+            for (const ch of word) {
+                const probe = chunk + ch;
+                if ((ctx.measureText(probe).width || 0) <= maxWidth || chunk.length === 0) {
+                    chunk = probe;
+                } else {
+                    parts.push(chunk);
+                    chunk = ch;
+                }
+            }
+            if (chunk) parts.push(chunk);
+            return parts.length ? parts : [''];
+        };
+
+        for (const word of words) {
+            if (!current) {
+                if ((ctx.measureText(word).width || 0) <= maxWidth) {
+                    current = word;
+                } else {
+                    const parts = splitLongWord(word);
+                    lines.push(...parts.slice(0, -1));
+                    current = parts[parts.length - 1];
+                }
+                continue;
+            }
+
+            const candidate = `${current} ${word}`;
+            if ((ctx.measureText(candidate).width || 0) <= maxWidth) {
+                current = candidate;
+                continue;
+            }
+
+            lines.push(current);
+            if ((ctx.measureText(word).width || 0) <= maxWidth) {
+                current = word;
+            } else {
+                const parts = splitLongWord(word);
+                lines.push(...parts.slice(0, -1));
+                current = parts[parts.length - 1];
+            }
+        }
+
+        if (current) lines.push(current);
+        return lines.length ? lines : [''];
+    }
+
+    hasInlineMath(text) {
+        const s = String(text || '');
+        let count = 0;
+        for (let i = 0; i < s.length; i++) {
+            if (s[i] === '$' && s[i - 1] !== '\\') count++;
+        }
+        return count >= 2;
+    }
+
+    parseInlineMathSegments(text) {
+        const src = String(text || '');
+        const segments = [];
+        let current = '';
+        let inMath = false;
+        for (let i = 0; i < src.length; i++) {
+            const ch = src[i];
+            if (ch === '$' && src[i - 1] !== '\\') {
+                if (inMath) {
+                    segments.push({ type: 'math', value: current });
+                } else if (current) {
+                    segments.push({ type: 'text', value: current });
+                }
+                current = '';
+                inMath = !inMath;
+                continue;
+            }
+            current += ch;
+        }
+        if (current) segments.push({ type: 'text', value: current });
+        return segments.length ? segments : [{ type: 'text', value: src }];
+    }
+
+    parseCssLengthPx(value, fontPx = 12) {
+        if (!value) return 0;
+        const s = String(value).trim();
+        const n = parseFloat(s);
+        if (!Number.isFinite(n)) return 0;
+        if (s.endsWith('px')) return n;
+        if (s.endsWith('em')) return n * fontPx;
+        if (s.endsWith('ex')) return n * fontPx * 0.5;
+        if (s.endsWith('%')) return 0;
+        return n;
+    }
+
+    ensureMathSvg(tex, ctx = this.ctx) {
+        const key = String(tex || '').trim();
+        if (!key) return null;
+        if (this.mathSvgCache.has(key)) return this.mathSvgCache.get(key);
+
+        const entry = {
+            status: 'loading',
+            img: null,
+            width: Math.max(8, ctx.measureText(key).width || 8),
+            height: 14
+        };
+        this.mathSvgCache.set(key, entry);
+
+        const mj = window.MathJax;
+        if (!mj || typeof mj.tex2svgPromise !== 'function') {
+            entry.status = 'error';
+            return entry;
+        }
+
+        mj.tex2svgPromise(key, { display: false }).then((node) => {
+            const svg = node && node.querySelector ? node.querySelector('svg') : null;
+            if (!svg) throw new Error('MathJax SVG not found');
+            const fontPx = parseFloat((ctx.font || '12px').match(/(\d+(\.\d+)?)px/)?.[1] || '12');
+            let widthPx = this.parseCssLengthPx(svg.getAttribute('width') || svg.style.width || '', fontPx);
+            let heightPx = this.parseCssLengthPx(svg.getAttribute('height') || svg.style.height || '', fontPx);
+            if (!widthPx || !heightPx) {
+                const vb = (svg.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number);
+                if (vb.length === 4 && Number.isFinite(vb[2]) && Number.isFinite(vb[3])) {
+                    widthPx = widthPx || Math.max(8, vb[2] / 80);
+                    heightPx = heightPx || Math.max(10, vb[3] / 80);
+                }
+            }
+            widthPx = Math.max(8, widthPx || entry.width);
+            heightPx = Math.max(10, heightPx || entry.height);
+            svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+            svg.setAttribute('width', `${widthPx}`);
+            svg.setAttribute('height', `${heightPx}`);
+            svg.style.color = '#000';
+            const svgText = new XMLSerializer().serializeToString(svg);
+            const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+            const img = new Image();
+            img.onload = () => {
+                entry.status = 'ready';
+                entry.img = img;
+                entry.width = widthPx;
+                entry.height = heightPx;
+                this.render();
+            };
+            img.onerror = () => {
+                entry.status = 'error';
+            };
+            img.src = dataUrl;
+        }).catch(() => {
+            entry.status = 'error';
+        });
+
+        return entry;
+    }
+
+    measureInlineLabel(text, ctx = this.ctx) {
+        const segments = this.parseInlineMathSegments(text);
+        let width = 0;
+        let height = this.labelFontSize;
+        segments.forEach((seg) => {
+            if (!seg.value) return;
+            if (seg.type === 'text') {
+                const w = ctx.measureText(seg.value).width || 0;
+                width += w;
+                height = Math.max(height, this.labelFontSize);
+            } else {
+                const math = this.ensureMathSvg(seg.value, ctx);
+                const w = (math && math.width) || (ctx.measureText(seg.value).width || 0);
+                const h = (math && math.height) || this.labelFontSize;
+                width += w;
+                height = Math.max(height, h);
+            }
+        });
+        return { width, height, segments };
+    }
+
+    drawInlineLabel(ctx, text, x, y) {
+        const measured = this.measureInlineLabel(text, ctx);
+        const savedAlign = ctx.textAlign;
+        const savedBaseline = ctx.textBaseline;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        let cursorX = x - measured.width / 2;
+        measured.segments.forEach((seg) => {
+            if (!seg.value) return;
+            if (seg.type === 'text') {
+                const w = ctx.measureText(seg.value).width || 0;
+                ctx.fillText(seg.value, cursorX, y);
+                cursorX += w;
+            } else {
+                const math = this.ensureMathSvg(seg.value, ctx);
+                const w = (math && math.width) || (ctx.measureText(seg.value).width || 0);
+                const h = (math && math.height) || this.labelFontSize;
+                if (math && math.status === 'ready' && math.img) {
+                    ctx.drawImage(math.img, cursorX, y - h / 2, w, h);
+                } else {
+                    ctx.fillText(seg.value, cursorX, y);
+                }
+                cursorX += w;
+            }
+        });
+        ctx.textAlign = savedAlign;
+        ctx.textBaseline = savedBaseline;
+        return measured;
+    }
+
+    // Split an edge label into two lines, preferring break points near spaces and balanced widths.
+    splitEdgeLabelTwoLines(text, maxWidth, ctx = this.ctx) {
+        const src = String(text || '').trim().replace(/\s+/g, ' ');
+        if (!src) return ['', ''];
+        if ((this.measureInlineLabel(src, ctx).width || 0) <= maxWidth) return [src, ''];
+
+        let best = null;
+        for (let i = 1; i < src.length; i++) {
+            const a = src.slice(0, i).trim();
+            const b = src.slice(i).trim();
+            if (!a || !b) continue;
+            const wa = this.measureInlineLabel(a, ctx).width || 0;
+            const wb = this.measureInlineLabel(b, ctx).width || 0;
+            const overflow = Math.max(0, wa - maxWidth) + Math.max(0, wb - maxWidth);
+            const breakInWord = /\S/.test(src[i - 1]) && /\S/.test(src[i]);
+            const breakPenalty = breakInWord ? 12 : 0;
+            const balancePenalty = Math.abs(wa - wb) * 0.04;
+            const score = overflow * 10 + breakPenalty + balancePenalty;
+            if (!best || score < best.score) best = { a, b, score };
+        }
+
+        if (best) return [best.a, best.b];
+        const mid = Math.floor(src.length / 2);
+        return [src.slice(0, mid).trim(), src.slice(mid).trim()];
+    }
+
+    // Draw edge label rotated with edge slope and offset from edge.
+    // If the label is too long for the border-to-border edge span, render two lines around the edge.
+    drawEdgeLabel(ctx, v1, v2, label, r1 = 14, r2 = 14, hasMidArrow = false) {
+        const text = String(label || '').trim();
+        if (!text) return;
+
+        const fullDx = v2.x - v1.x;
+        const fullDy = v2.y - v1.y;
+        const fullDist = Math.hypot(fullDx, fullDy);
+        if (fullDist < 1) return;
+
+        const dx = v2.x - v1.x;
+        const dy = v2.y - v1.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 1) return;
+        const ux = dx / dist;
+        const uy = dy / dist;
+
+        ctx.save();
+        this.applyLabelFont(ctx);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#000000';
+
+        const textWidth = this.measureInlineLabel(text, ctx).width || 0;
+        const alongMargin = 6;
+        const normalMargin = hasMidArrow ? 16 : 10; // extra offset when midpoint arrow is present
+        const usableSpan = Math.max(1, dist - r1 - r2);
+        const nx = -uy;
+        const ny = ux;
+
+        // Center between node borders.
+        let centerAlong = r1 + usableSpan * 0.5;
+        if (hasMidArrow) {
+            // Keep labels away from the midpoint arrowhead for readability.
+            centerAlong += Math.min(18, usableSpan * 0.18);
+        }
+        const minAlong = r1 + 6;
+        const maxAlong = dist - r2 - 6;
+        centerAlong = Math.max(minAlong, Math.min(maxAlong, centerAlong));
+        const cx = v1.x + ux * centerAlong;
+        const cy = v1.y + uy * centerAlong;
+        let readableAngle = Math.atan2(uy, ux);
+        if (readableAngle > Math.PI / 2 || readableAngle < -Math.PI / 2) readableAngle += Math.PI;
+
+        const isOverflow = textWidth + alongMargin * 2 > usableSpan;
+        if (!isOverflow) {
+            ctx.translate(cx + nx * normalMargin, cy + ny * normalMargin);
+            ctx.rotate(readableAngle);
+            this.drawInlineLabel(ctx, text, 0, 0);
+        } else {
+            // Overflow: split into two lines and place one on each side of the edge.
+            const [topLine, bottomLine] = this.splitEdgeLabelTwoLines(text, usableSpan - alongMargin * 2, ctx);
+            const lineOffset = hasMidArrow ? 11 : 8;
+            ctx.translate(cx, cy);
+            ctx.rotate(readableAngle);
+            if (topLine) this.drawInlineLabel(ctx, topLine, 0, -lineOffset);
+            if (bottomLine) this.drawInlineLabel(ctx, bottomLine, 0, lineOffset);
+        }
+        ctx.restore();
     }
 
     // Compute intersection point of ray (from center going backwards toward `from`) with polygon edge AB
@@ -571,74 +902,89 @@ class GraphApp {
     }
 
     // return index of top-most vertex under (x,y) using computed radii
-    getTopVertexAt(x, y) {
+    getTopVertexAt(x, y, extraRadius = 0) {
         for (let i = this.graph.vertices.length - 1; i >= 0; i--) {
             const v = this.graph.vertices[i];
             if (!v) continue;
-            const r = this.vertexRadii[i] || 14;
+            const r = (this.vertexRadii[i] || 14) + extraRadius;
             const dx = v.x - x; const dy = v.y - y;
             if (Math.hypot(dx, dy) <= r) return i;
         }
         return null;
     }
 
+    // return nearest vertex if pointer is just outside the node boundary (helps in edge mode)
+    getNearestVertexAt(x, y, maxOutsidePx = 10) {
+        let bestIdx = null;
+        let bestOutside = Infinity;
+        for (let i = this.graph.vertices.length - 1; i >= 0; i--) {
+            const v = this.graph.vertices[i];
+            if (!v) continue;
+            const r = this.vertexRadii[i] || 14;
+            const outside = Math.hypot(v.x - x, v.y - y) - r;
+            if (outside <= maxOutsidePx && outside < bestOutside) {
+                bestOutside = outside;
+                bestIdx = i;
+            }
+        }
+        return bestIdx;
+    }
+
+    // Prefer vertices near the pointer to avoid edge hover/selection stealing focus.
+    getEdgeAtPosPreferVertex(x, y, vertexGuardPx = 6) {
+        for (let i = this.graph.vertices.length - 1; i >= 0; i--) {
+            const v = this.graph.vertices[i];
+            if (!v) continue;
+            const r = (this.vertexRadii && this.vertexRadii[i]) || 14;
+            if (Math.hypot(v.x - x, v.y - y) <= r + vertexGuardPx) {
+                return null;
+            }
+        }
+        return this.graph.getEdgeAtPos(x, y);
+    }
+
     handleContextMenu(e) {
         const { x, y } = this.getCanvasCoordinates(e);
+        const opened = this.openContextMenuAt(x, y, e.clientX, e.clientY);
+        if (opened) e.preventDefault();
+    }
+
+    openContextMenuAt(x, y, clientX, clientY) {
         this.computeVertexRadii();
         const vertexIdx = this.getTopVertexAt(x, y);
-        const edgeIdx = this.graph.getEdgeAtPos(x, y);
-    const vertexMenu = document.getElementById('vertex-menu');
-    const edgeMenu = document.getElementById('edge-menu');
-        // If both an edge and a vertex are detected, choose the one closer to the click.
-        // Bias toward edge if click is close to the segment (helps when vertex radii are large).
+        const edgeIdx = this.getEdgeAtPosPreferVertex(x, y, 4);
+        const vertexMenu = document.getElementById('vertex-menu');
+        const edgeMenu = document.getElementById('edge-menu');
         let target = null; // 'vertex'|'edge'
-        if (vertexIdx === null && edgeIdx === null) return;
+        if (vertexIdx === null && edgeIdx === null) return false;
         if (vertexIdx !== null && edgeIdx === null) target = 'vertex';
         else if (vertexIdx === null && edgeIdx !== null) target = 'edge';
-        else {
-            // both present: compare distances
-            const v = this.graph.vertices[vertexIdx];
-            const distV = Math.hypot(v.x - x, v.y - y);
-            const a = this.graph.vertices[this.graph.edges[edgeIdx][0]];
-            const b = this.graph.vertices[this.graph.edges[edgeIdx][1]];
-            const distE = distancePointToSegment({ x, y }, a, b);
-            // choose edge if it's very close to the segment OR noticeably closer than the vertex
-            if (distE <= 10 || distE < distV * 0.8) target = 'edge';
-            else target = 'vertex';
-        }
+        else target = 'vertex';
 
         if (target === 'vertex' && vertexMenu) {
-            // Open vertex menu
             this.editingVertexIdx = vertexIdx;
+            this.editingEdgeIdx = null;
             document.getElementById('vertex-name-input').value = this.graph.vertexLabels[vertexIdx];
             document.getElementById('vertex-color-input').value = this.graph.vertexColors[vertexIdx];
             document.getElementById('vertex-shape-select').value = this.graph.vertexShapes[vertexIdx] || 'circle';
 
+            this.placeMenu(vertexMenu, clientX, clientY, 200, 140);
             vertexMenu.style.display = 'block';
-            const menuWidth = vertexMenu.offsetWidth || 200;
-            const menuHeight = vertexMenu.offsetHeight || 140;
-            let left = e.clientX;
-            let top = e.clientY;
-            if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 8;
-            if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight - 8;
-            vertexMenu.style.left = `${left}px`;
-            vertexMenu.style.top = `${top}px`;
-            e.preventDefault();
-            return;
+            const edgeMenuEl = document.getElementById('edge-menu');
+            if (edgeMenuEl) edgeMenuEl.style.display = 'none';
+            return true;
         }
 
         if (target === 'edge' && edgeMenu) {
             this.editingEdgeIdx = edgeIdx;
-            // Populate
+            this.editingVertexIdx = null;
             document.getElementById('edge-label-input').value = this.graph.edgeLabels[edgeIdx] || '';
             document.getElementById('edge-color-input').value = this.graph.edgeColors[edgeIdx] || '#000000';
             document.getElementById('edge-style-select').value = this.graph.edgeStyles[edgeIdx] || 'solid';
-            // populate direction select, showing vertex labels for clarity
             const dirSelect = document.getElementById('edge-direction-select');
             if (dirSelect) {
                 const aLabel = this.graph.vertexLabels[this.graph.edges[edgeIdx][0]] || 'A';
                 const bLabel = this.graph.vertexLabels[this.graph.edges[edgeIdx][1]] || 'B';
-                // update option text
                 for (let i = 0; i < dirSelect.options.length; i++) {
                     const opt = dirSelect.options[i];
                     if (opt.value === 'A->B') opt.text = `${aLabel} → ${bLabel}`;
@@ -651,22 +997,44 @@ class GraphApp {
             const midCheckbox = document.getElementById('edge-mid-checkbox');
             if (midCheckbox) midCheckbox.checked = !!this.graph.edgeMid[edgeIdx];
 
+            this.placeMenu(edgeMenu, clientX, clientY, 220, 120);
             edgeMenu.style.display = 'block';
-            const menuWidth = edgeMenu.offsetWidth || 220;
-            const menuHeight = edgeMenu.offsetHeight || 120;
-            let left = e.clientX;
-            let top = e.clientY;
-            if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 8;
-            if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight - 8;
-            edgeMenu.style.left = `${left}px`;
-            edgeMenu.style.top = `${top}px`;
-            // show brief status to help debug edge clicks
-            this.showStatus(`Edge ${edgeIdx} detected`);
-            // also focus first input so keyboard events don't leak
+            const vertexMenuEl = document.getElementById('vertex-menu');
+            if (vertexMenuEl) vertexMenuEl.style.display = 'none';
             const edgeInput = document.getElementById('edge-label-input');
             if (edgeInput) edgeInput.focus();
-            e.preventDefault();
-            return;
+            return true;
+        }
+        return false;
+    }
+
+    placeMenu(menuEl, clientX, clientY, fallbackW = 220, fallbackH = 140) {
+        const menuWidth = menuEl.offsetWidth || fallbackW;
+        const menuHeight = menuEl.offsetHeight || fallbackH;
+        let left = clientX;
+        let top = clientY;
+        if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 8;
+        if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight - 8;
+        menuEl.style.left = `${Math.max(8, left)}px`;
+        menuEl.style.top = `${Math.max(8, top)}px`;
+    }
+
+    hideContextMenus() {
+        const vertexMenu = document.getElementById('vertex-menu');
+        const edgeMenu = document.getElementById('edge-menu');
+        if (vertexMenu) vertexMenu.style.display = 'none';
+        if (edgeMenu) edgeMenu.style.display = 'none';
+        this.editingVertexIdx = null;
+        this.editingEdgeIdx = null;
+    }
+
+    handleDocumentMouseDown(e) {
+        const vertexMenu = document.getElementById('vertex-menu');
+        const edgeMenu = document.getElementById('edge-menu');
+        const insideVertexMenu = vertexMenu && vertexMenu.style.display === 'block' && vertexMenu.contains(e.target);
+        const insideEdgeMenu = edgeMenu && edgeMenu.style.display === 'block' && edgeMenu.contains(e.target);
+        if (!insideVertexMenu && !insideEdgeMenu) {
+            this.hideContextMenus();
         }
     }
 
@@ -681,7 +1049,8 @@ class GraphApp {
 
         // otherwise we handle hover highlighting here (if not dragging)
         const { x, y } = this.getCanvasCoordinates(e);
-        const edgeIdx = this.graph.getEdgeAtPos(x, y);
+        this.computeVertexRadii();
+        const edgeIdx = this.getEdgeAtPosPreferVertex(x, y, 6);
         if (edgeIdx !== this.hoveredEdgeIdx) {
             this.hoveredEdgeIdx = edgeIdx;
             this.canvas.style.cursor = edgeIdx !== null ? 'pointer' : 'default';
@@ -718,13 +1087,19 @@ class GraphApp {
     } else {
             // single-key shortcuts
             if (key === 'v') {
+                this.mode = 'select';
+                this.graph.selectedVertex = null;
+                this.showStatus("Select mode");
+            } else if (key === 'a') {
                 this.mode = 'addVertex';
-                this.showStatus("Vertex mode");
+                this.graph.selectedVertex = null;
+                this.showStatus("Add vertex mode");
             } else if (key === 'e') {
                 this.mode = 'addEdge';
                 this.showStatus("Edge mode");
             } else if (key === 'm') {
                 this.mode = 'moveVertex';
+                this.graph.selectedVertex = null;
                 this.showStatus("Move vertex mode");
             } else if (key === 'c') {
                 if (confirm('Clear the entire graph? This cannot be undone.')) {
@@ -811,17 +1186,11 @@ class GraphApp {
                 this.arrowActions.push({ idx, dir, v1, v2, color });
             }
 
-            // Edge label at midpoint
-            const mx = (v1.x + v2.x) / 2;
-            const my = (v1.y + v2.y) / 2;
             const label = this.graph.edgeLabels[idx] || '';
-            if (label && label.length > 0) {
-                this.ctx.fillStyle = '#000000';
-                this.ctx.font = '12px Verdana';
-                this.ctx.textAlign = 'center';
-                this.ctx.textBaseline = 'middle';
-                this.ctx.fillText(label, mx, my - 10);
-            }
+            const r1 = (this.vertexRadii && this.vertexRadii[i]) || 14;
+            const r2 = (this.vertexRadii && this.vertexRadii[j]) || 14;
+            const hasMidArrow = !!(this.graph.edgeMid && this.graph.edgeMid[idx] && dir && dir !== 'none');
+            this.drawEdgeLabel(this.ctx, v1, v2, label, r1, r2, hasMidArrow);
         });
 
         // Draw vertices with white background and colored border; support shapes
@@ -852,10 +1221,20 @@ class GraphApp {
 
             // Vertex label (black text on white background)
             this.ctx.fillStyle = '#000000';
-            this.ctx.font = '12px Verdana';
+            this.applyLabelFont(this.ctx);
             this.ctx.textAlign = 'center';
             this.ctx.textBaseline = 'middle';
-            this.ctx.fillText(this.graph.vertexLabels[i], vertex.x, vertex.y);
+            const label = this.graph.vertexLabels[i] || '';
+            if (this.hasInlineMath(label)) {
+                this.drawInlineLabel(this.ctx, label, vertex.x, vertex.y);
+            } else {
+                const lines = this.wrapLabelText(label, this.vertexLabelMaxWidth, this.ctx);
+                const totalHeight = (lines.length - 1) * this.vertexLabelLineHeight;
+                const startY = vertex.y - totalHeight / 2;
+                lines.forEach((line, lineIdx) => {
+                    this.ctx.fillText(line, vertex.x, startY + lineIdx * this.vertexLabelLineHeight);
+                });
+            }
         });
 
         // Draw collected arrowheads on top of vertices so they are visible at the node border
@@ -1153,17 +1532,19 @@ class GraphApp {
                 this.arrowActions.push({ idx, dir, v1: { x: v1.x + offsetX, y: v1.y + offsetY }, v2: { x: v2.x + offsetX, y: v2.y + offsetY }, color });
             }
 
-            // edge label
-            const mx = (v1.x + v2.x) / 2 + offsetX;
-            const my = (v1.y + v2.y) / 2 + offsetY;
             const label = this.graph.edgeLabels[idx] || '';
-            if (label && label.length > 0) {
-                tempCtx.fillStyle = '#000000';
-                tempCtx.font = '12px Verdana';
-                tempCtx.textAlign = 'center';
-                tempCtx.textBaseline = 'middle';
-                tempCtx.fillText(label, mx, my - 8);
-            }
+            const r1 = (this.vertexRadii && this.vertexRadii[i]) || 14;
+            const r2 = (this.vertexRadii && this.vertexRadii[j]) || 14;
+            const hasMidArrow = !!(this.graph.edgeMid && this.graph.edgeMid[idx] && dir && dir !== 'none');
+            this.drawEdgeLabel(
+                tempCtx,
+                { x: v1.x + offsetX, y: v1.y + offsetY },
+                { x: v2.x + offsetX, y: v2.y + offsetY },
+                label,
+                r1,
+                r2,
+                hasMidArrow
+            );
         });
 
         // Draw vertices (shifted) using computed radii
@@ -1212,10 +1593,20 @@ class GraphApp {
 
             // Vertex label
             tempCtx.fillStyle = '#000000';
-            tempCtx.font = '12px Verdana';
+            this.applyLabelFont(tempCtx);
             tempCtx.textAlign = 'center';
             tempCtx.textBaseline = 'middle';
-            tempCtx.fillText(this.graph.vertexLabels[i], cx, cy);
+            const label = this.graph.vertexLabels[i] || '';
+            if (this.hasInlineMath(label)) {
+                this.drawInlineLabel(tempCtx, label, cx, cy);
+            } else {
+                const lines = this.wrapLabelText(label, this.vertexLabelMaxWidth, tempCtx);
+                const totalHeight = (lines.length - 1) * this.vertexLabelLineHeight;
+                const startY = cy - totalHeight / 2;
+                lines.forEach((line, lineIdx) => {
+                    tempCtx.fillText(line, cx, startY + lineIdx * this.vertexLabelLineHeight);
+                });
+            }
         });
 
         // Draw arrowheads on top in temp canvas so they're visible

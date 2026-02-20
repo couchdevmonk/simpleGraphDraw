@@ -9,6 +9,13 @@
     <title>simpleGraphDraw v1.5</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <script>
+        window.MathJax = {
+            tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
+            svg: { fontCache: 'none' }
+        };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
     <style>
         * {
             margin: 0;
@@ -295,8 +302,12 @@
         <div id="menu">
             <div class="menu-section">
                 <div class="menu-title">Modes</div>
-                <div class="menu-option" data-mode="addVertex">
+                <div class="menu-option" data-mode="select">
                     <button class="shortcut-btn" title="V">V</button>
+                    Select
+                </div>
+                <div class="menu-option" data-mode="addVertex">
+                    <button class="shortcut-btn" title="A">A</button>
                     Add Vertex
                 </div>
                 <div class="menu-option" data-mode="addEdge">
@@ -335,7 +346,7 @@
             <div class="menu-section">
                 <div class="menu-title">Tip</div>
                 <div class="menu-option">
-                    Right-click a vertex or edge to edit its properties (label, color, shape/style).
+                    In Select mode (V), double-click a vertex or edge to edit; right-click also works.
                 </div>
             </div>
         </div>
